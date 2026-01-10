@@ -19,7 +19,7 @@ namespace rcopy_gui
         public MainWindow()
         {
             InitializeComponent();
-            DataContext = new MainViewModel();
+            DataContext = new MainViewModel(new DialogService());
         }
     }
 }

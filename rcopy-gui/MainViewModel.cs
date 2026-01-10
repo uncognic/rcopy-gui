@@ -8,9 +8,16 @@ using System.Threading.Tasks;
 
 namespace rcopy_gui
 {
+    public enum CopyMode
+    {
+        RegularCopy = 0,
+        Backup = 1
+    }
+
     public class MainViewModel : INotifyPropertyChanged
     {
         private readonly Robocopy _runner = new();
+        private readonly IDialogService _dialogService;
         private CancellationTokenSource? _cts;
 
         private const int MinThreads = 1;
@@ -23,6 +30,7 @@ namespace rcopy_gui
         private string _log = string.Empty;
         private bool _isRunning;
         private int _progress;
+        private CopyMode _mode = CopyMode.RegularCopy;
 
         public string Source
         {
@@ -37,7 +45,26 @@ namespace rcopy_gui
         public int Threads
         {
             get => _threads;
-            set => SetProperty(ref _threads, Math.Clamp(value, MinThreads, MaxThreads));
+            set
+            {
+                int clamped = Math.Clamp(value, MinThreads, MaxThreads);
+                if (SetProperty(ref _threads, clamped))
+                {
+                    UpdateOptionsForMode();
+                }
+            }
+        }
+
+        public CopyMode Mode
+        {
+            get => _mode;
+            set
+            {
+                if (SetProperty(ref _mode, value))
+                {
+                    UpdateOptionsForMode();
+                }
+            }
         }
 
         public string Options
@@ -61,24 +88,43 @@ namespace rcopy_gui
             private set => SetProperty(ref _progress, value);
         }
 
-        public RelayCommand StartCommand
-        {
-            get;
-        }
-        public RelayCommand CancelCommand
-        {
-            get;
-        }
-
+        public RelayCommand StartCommand { get; }
+        public RelayCommand CancelCommand { get; }
+        public RelayCommand BrowseSourceCommand { get; }
+        public RelayCommand BrowseDestinationCommand { get; }
         public MainViewModel()
+            : this(new DialogService())
         {
+        }
+        public MainViewModel(IDialogService dialogService)
+        {
+            _dialogService = dialogService;
+
             StartCommand = new RelayCommand(() => _ = StartAsync(), () => !IsRunning);
             CancelCommand = new RelayCommand(Cancel, () => IsRunning);
 
-            Options = "/MIR /COPY:DATSO /Z /R:3 /W:2 /V /NP /TEE";
+            BrowseSourceCommand = new RelayCommand(() => _ = BrowseSourceAsync());
+            BrowseDestinationCommand = new RelayCommand(() => _ = BrowseDestinationAsync());
 
-            _runner.LineReceived += line => Application.Current.Dispatcher.Invoke(() => AppendLog(line));
-            _runner.ProgressChanged += p => Application.Current.Dispatcher.Invoke(() => Progress = p);
+            UpdateOptionsForMode();
+
+            _runner.LineReceived += line => System.Windows.Application.Current.Dispatcher.Invoke(() => AppendLog(line));
+            _runner.ProgressChanged += p => System.Windows.Application.Current.Dispatcher.Invoke(() => Progress = p);
+        }
+
+        private void UpdateOptionsForMode()
+        {
+            string baseOptions;
+            if (Mode == CopyMode.Backup)
+            {
+                baseOptions = "/E /XO /XJ /COPY:DATSO /DCOPY:T /ZB /R:3 /W:2 /V /NP";
+            }
+            else
+            {
+                baseOptions = "/E /XJ /COPY:DAT /DCOPY:T /Z /R:3 /W:2 /V /NP";
+            }
+                
+            Options = $"{baseOptions} /MT:{Threads}";
         }
 
         private void AppendLog(string line)
@@ -87,6 +133,24 @@ namespace rcopy_gui
             if (sb.Length > 0) sb.AppendLine();
             sb.Append(line);
             Log = sb.ToString();
+        }
+
+        private async Task BrowseSourceAsync()
+        {
+            var picked = await _dialogService.PickFolderAsync(Source, "Select source folder").ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(picked))
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(() => Source = picked);
+            }
+        }
+
+        private async Task BrowseDestinationAsync()
+        {
+            var picked = await _dialogService.PickFolderAsync(Destination, "Select destination folder").ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(picked))
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(() => Destination = picked);
+            }
         }
 
         public async Task StartAsync()
@@ -106,19 +170,20 @@ namespace rcopy_gui
 
             try
             {
-                string commandLine = $"{Options} /MT:{Threads}";
+                string commandLine = Options;
+
                 AppendLog($"robocopy \"{Source}\" \"{Destination}\" {commandLine}");
                 int exitCode = await _runner.RunAsync(Source, Destination, commandLine, _cts.Token).ConfigureAwait(false);
 
-                Application.Current.Dispatcher.Invoke(() => AppendLog($"Robocopy exited with code {exitCode}."));
+                System.Windows.Application.Current.Dispatcher.Invoke(() => AppendLog($"Robocopy exited with code {exitCode}."));
             }
             catch (OperationCanceledException)
             {
-                Application.Current.Dispatcher.Invoke(() => AppendLog("Operation canceled."));
+                System.Windows.Application.Current.Dispatcher.Invoke(() => AppendLog("Operation canceled."));
             }
             catch (Exception ex)
             {
-                Application.Current.Dispatcher.Invoke(() => AppendLog($"Error: {ex.Message}"));
+                System.Windows.Application.Current.Dispatcher.Invoke(() => AppendLog($"Error: {ex.Message}"));
             }
             finally
             {
