@@ -77,10 +77,27 @@ namespace rcopy_gui
             private set => SetProperty(ref _log, value);
         }
         public bool IsRunning 
-        { get => _isRunning;
-            private set { SetProperty(ref _isRunning, value);
-                StartCommand.RaiseCanExecuteChanged();
-                CancelCommand.RaiseCanExecuteChanged();
+        { 
+            get => _isRunning;
+            private set 
+            { 
+                if (SetProperty(ref _isRunning, value))
+                {
+                    var app = System.Windows.Application.Current;
+                    if (app?.Dispatcher != null && !app.Dispatcher.CheckAccess())
+                    {
+                        app.Dispatcher.Invoke(() =>
+                        {
+                            StartCommand.RaiseCanExecuteChanged();
+                            CancelCommand.RaiseCanExecuteChanged();
+                        });
+                    }
+                    else
+                    {
+                        StartCommand.RaiseCanExecuteChanged();
+                        CancelCommand.RaiseCanExecuteChanged();
+                    }
+                }
             } 
         }
         public int Progress {
@@ -123,14 +140,13 @@ namespace rcopy_gui
             {
                 baseOptions = "/E /XJ /COPY:DAT /DCOPY:T /Z /R:3 /W:2 /V /NP";
             }
-                
+
             Options = $"{baseOptions} /MT:{Threads}";
         }
 
         private void AppendLog(string line)
         {
             var sb = new StringBuilder(Log);
-            if (sb.Length > 0) sb.AppendLine();
             sb.Append(line);
             Log = sb.ToString();
         }
@@ -202,9 +218,23 @@ namespace rcopy_gui
         public event PropertyChangedEventHandler? PropertyChanged;
         protected bool SetProperty<T>(ref T field, T value, [CallerMemberName] string? name = null)
         {
-            if (Equals(field, value)) return false;
+            if (Equals(field, value)) return false; 
             field = value!;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+            var app = System.Windows.Application.Current;
+            if (app?.Dispatcher != null && !app.Dispatcher.CheckAccess())
+            {
+                string? localName = name;
+                app.Dispatcher.Invoke(() =>
+                {
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(localName));
+                });
+            }
+            else
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+            }
+
             return true;
         }
         #endregion

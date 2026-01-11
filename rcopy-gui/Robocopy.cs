@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,19 +33,8 @@ namespace rcopy_gui
             process.StartInfo = psi;
 
             var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            process.OutputDataReceived += (s, e) =>
-            {
-                if (e.Data is null) return;
-                LineReceived?.Invoke(e.Data);
-                TryParseProgress(e.Data);
-            };
-            process.ErrorDataReceived += (s, e) =>
-            {
-                if (e.Data is null) return;
-                LineReceived?.Invoke(e.Data);
-                TryParseProgress(e.Data);
-            };
+            Task stdoutTask = Task.CompletedTask;
+            Task stderrTask = Task.CompletedTask;
 
             cancellationToken.Register(() =>
             {
@@ -63,8 +53,46 @@ namespace rcopy_gui
                 if (!process.Start())
                     throw new InvalidOperationException("Failed to start robocopy process.");
 
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
+                stdoutTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var reader = process.StandardOutput;
+                        var buffer = new char[1024];
+                        while (true)
+                        {
+                            int read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                            if (read <= 0) break;
+                            var chunk = new string(buffer, 0, read);
+                            LineReceived?.Invoke(chunk);
+                            TryParseProgress(chunk);
+                        }
+                    }
+                    catch
+                    {
+
+                    }
+                });
+
+                stderrTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var reader = process.StandardError;
+                        var buffer = new char[1024];
+                        while (true)
+                        {
+                            int read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                            if (read <= 0) break;
+                            var chunk = new string(buffer, 0, read);
+                            LineReceived?.Invoke(chunk);
+                            TryParseProgress(chunk);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                });
 
                 process.EnableRaisingEvents = true;
                 process.Exited += (s, e) =>
@@ -72,7 +100,17 @@ namespace rcopy_gui
                     tcs.TrySetResult(process.ExitCode);
                 };
 
-                return await tcs.Task.ConfigureAwait(false);
+                int exitCode = await tcs.Task.ConfigureAwait(false);
+                try
+                {
+                    await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                }
+                catch
+                {
+
+                }
+
+                return exitCode;
             }
             finally
             {
